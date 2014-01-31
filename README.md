@@ -1,2 +1,1 @@
-globallogic
-===========
+COM Shell Extention
