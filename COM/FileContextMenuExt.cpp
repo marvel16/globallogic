@@ -35,6 +35,7 @@ WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
 #include <vector>
 #include <fstream>
 #include <set>
+
 #pragma comment(lib, "shlwapi.lib")
 
 
@@ -52,14 +53,10 @@ void WriteToLogFile(const std::multiset<std::wstring> &wstr)
 	
 	tempSet=wstr;
 	
-
-	
-
 	logFile.open(L"C:\\Log\\logFile.txt",ios::in);
 	while(getline(logFile, tempStr))
 	{
-		if(tempStr!=L"\n");
-		//tempStr=Path.GetFileName( tempStr );
+		if(tempStr!=L"\n")
 			tempSet.insert(tempStr);
 	}
 	logFile.close();
@@ -67,7 +64,7 @@ void WriteToLogFile(const std::multiset<std::wstring> &wstr)
 	logFile.open(L"C:\\Log\\logFile.txt", ios::out);
 	for(multiset<wstring>::iterator it = tempSet.begin(); it != tempSet.end(); it++)
 		logFile << *it << endl; //writing into file string
-	logFile.close();
+	
 }
 
 FileContextMenuExt::FileContextMenuExt(void) : m_cRef(1), 
@@ -173,42 +170,22 @@ IFACEMETHODIMP FileContextMenuExt::Initialize(
         if (hDrop != NULL)
         {
             // Determine how many files are involved in this operation. This 
-            // code sample displays the custom context menu item when only 
-            // one file is selected. 
+            // code sample displays the custom context menu item when few files are selected. 
             UINT nFiles = DragQueryFileW(hDrop, 0xFFFFFFFF, NULL, 0);
             
             for (UINT i = 0; i < nFiles;i++)
 			{
 				// Get the path of the file.
-			    if (0 == DragQueryFileW(hDrop, i, m_szSelectedFile, 
-                    ARRAYSIZE(m_szSelectedFile)))
-                {
-                    continue;
-                }
-				auto hndlFile = CreateFile(m_szSelectedFile,GENERIC_READ,FILE_SHARE_READ,0, OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL ,0); //creating handle for file
-				std::wstring sizeFileStr,sizeFileStr1(m_szSelectedFile);
-				BY_HANDLE_FILE_INFORMATION fileInfoStruct;
-				GetFileInformationByHandle(hndlFile,&fileInfoStruct);
+				if (0 == DragQueryFileW(hDrop, i, m_szSelectedFile,
+					ARRAYSIZE(m_szSelectedFile)))
 				{
-					int i=0;
-					int size = sizeFileStr1.size()-1;
-					SYSTEMTIME systemFileTime;
-					auto strSz = fileInfoStruct.nFileIndexLow;//geting file size
-
-					while(sizeFileStr1[size-i] != L'\\' ) i++; //
-					sizeFileStr = sizeFileStr1.substr(size-i+1);//Converting fullPath into <filename>
-					
-					FileTimeToSystemTime(&(fileInfoStruct.ftCreationTime), &systemFileTime);// coverting FILETIME to SYSTEMTIME
-
-					sizeFileStr+= L"; Size: " + std::to_wstring(strSz)+ L" Bytes" + L"; Date: "
-						+ std::to_wstring(systemFileTime.wDay) + L"/" + std::to_wstring(systemFileTime.wMonth) + L"/"
-						+ std::to_wstring(systemFileTime.wYear) + L"; Time: " + std::to_wstring(systemFileTime.wHour) + L":"
-						+ std::to_wstring(systemFileTime.wMinute) + L":" + std::to_wstring(systemFileTime.wSecond); // into string
-					fileName.insert(sizeFileStr);
-					
-					hr = S_OK;
+					continue;
 				}
+				fileName.insert(m_szSelectedFile);
+
+				hr = S_OK;
 			}
+			
 
             GlobalUnlock(stm.hGlobal);
         }
@@ -286,8 +263,68 @@ IFACEMETHODIMP FileContextMenuExt::QueryContextMenu(
 //
 IFACEMETHODIMP FileContextMenuExt::InvokeCommand(LPCMINVOKECOMMANDINFO pici)
 {
-    
-	WriteToLogFile(this->fileName);
+	typedef std::pair<unsigned int, std::wstring> PAIR;
+	std::multiset <std::wstring> fileName_info;
+	std::vector <PAIR> vec; //vector of pairs string-byte for as return value from threadpool
+	for (auto it = fileName.begin(); it != fileName.end(); ++it)
+		vec.push_back(std::make_pair(0, *it));
+		
+	std::vector<std::future<PAIR>> results;
+	ThreadPool pool(4); //creating threadpool with 4 threads
+	//do tasks (count per byte summ of droped files
+	for (int i = 0; i < vec.size(); ++i)
+	{
+		results.push_back(pool.enqueue(
+			[=]()-> std::pair<unsigned int, std::wstring>
+		{
+			PAIR pairres(vec[i]);
+			std::fstream file(pairres.second, std::ios_base::in | std::ios_base::binary);
+			unsigned int sum = 0;
+			char buff;
+
+			if (!file.is_open())
+			{
+				//std::cerr << "\nFile wasnt opened...\n";
+				throw std::runtime_error("(CheckSum::hashSum : File wasnt opened...");
+				
+			}
+
+			while (file.read(&buff, 1))
+				sum += (unsigned int)(buff);
+			pairres.first = sum;
+			return pairres;
+		}
+		));
+	}
+	//
+	for (auto it = results.begin(); it != results.end(); ++it)
+	{
+		auto P = it->get(); // get pair from future
+		auto hndlFile = CreateFile(P.second.c_str(), GENERIC_READ, FILE_SHARE_READ, 0, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0); //creating handle for file
+		std::wstring sizeFileStr, sizeFileStrTemp(P.second);
+		BY_HANDLE_FILE_INFORMATION fileInfoStruct;
+		GetFileInformationByHandle(hndlFile, &fileInfoStruct);
+		
+		int i = 0;
+		int size = sizeFileStrTemp.size() - 1;
+		SYSTEMTIME systemFileTime;
+		auto strSz = fileInfoStruct.nFileIndexLow;//geting file size
+			
+		while (sizeFileStrTemp[size - i] != L'\\') i++; //
+		sizeFileStr = sizeFileStrTemp.substr(size - i + 1);//Converting fullPath into <filename>
+
+		FileTimeToSystemTime(&(fileInfoStruct.ftCreationTime), &systemFileTime);// coverting FILETIME to SYSTEMTIME
+		//creating string to write into multiset of strings for later loging
+		sizeFileStr += L"; Size: " + std::to_wstring(strSz) + L" Bytes" + L"; Date: "
+			+ std::to_wstring(systemFileTime.wDay) + L"/" + std::to_wstring(systemFileTime.wMonth) + L"/"
+			+ std::to_wstring(systemFileTime.wYear) + L"; Time: " + std::to_wstring(systemFileTime.wHour) + L":"
+			+ std::to_wstring(systemFileTime.wMinute) + L":" + std::to_wstring(systemFileTime.wSecond)
+			+ L" Per-Byte sum: " + std::to_wstring(P.first); // into string
+		fileName_info.insert(sizeFileStr);
+	}
+		
+	WriteToLogFile(fileName_info);
+	
     return S_OK;
 }
 

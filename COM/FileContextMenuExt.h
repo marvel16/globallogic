@@ -33,6 +33,10 @@ WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
 #include <shlobj.h>     // For IShellExtInit and IContextMenu
 #include <set>
 #include <string>
+#include "ThreadPool.h"
+
+
+
 class FileContextMenuExt : public IShellExtInit, public IContextMenu
 {
 public:
@@ -61,6 +65,7 @@ private:
     // The name of the selected file.
     wchar_t m_szSelectedFile[MAX_PATH];
 	std::multiset<std::wstring> fileName;
+	
 	
 
     // The method that handles the "display" verb.
